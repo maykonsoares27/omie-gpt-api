@@ -24,7 +24,9 @@ app.get("/", (req, res) => {
     empresa: "Industria de Cafe Nova Era",
     rotas: [
       "/clientes?nome=MARIANA",
-      "/teste-produtos"
+      "/produtos",
+      "/produtos?nome=ROMANO",
+      "/proposta?cliente=MARIANA&produto=ROMANO&quantidade=10"
     ]
   });
 });
@@ -57,29 +59,110 @@ app.get("/clientes", async (req, res) => {
   } catch (error) {
     res.status(500).json({
       erro: true,
-      etapa: "clientes",
+      mensagem: "Erro ao consultar clientes no Omie",
       detalhe: error.response?.data || error.message
     });
   }
 });
 
-app.get("/teste-produtos", async (req, res) => {
+app.get("/produtos", async (req, res) => {
   try {
+    const nome = req.query.nome || "";
+
     const dados = await chamarOmie(
       OMIE_PRODUTOS_URL,
       "ListarProdutos",
       {
         pagina: 1,
-        registros_por_pagina: 10,
+        registros_por_pagina: 50,
+        filtrar_apenas_omiepdv: "N",
         apenas_importado_api: "N"
       }
     );
 
-    res.json(dados);
+    let produtos = dados.produto_servico_cadastro || [];
+
+    if (nome) {
+      produtos = produtos.filter((produto) =>
+        JSON.stringify(produto)
+          .toUpperCase()
+          .includes(nome.toUpperCase())
+      );
+    }
+
+    res.json({
+      encontrados: produtos.length,
+      total_omie: dados.total_de_registros,
+      produtos
+    });
   } catch (error) {
     res.status(500).json({
       erro: true,
-      etapa: "teste-produtos",
+      mensagem: "Erro ao consultar produtos no Omie",
+      detalhe: error.response?.data || error.message
+    });
+  }
+});
+
+app.get("/proposta", async (req, res) => {
+  try {
+    const cliente = req.query.cliente;
+    const produto = req.query.produto;
+    const quantidade = Number(req.query.quantidade || 1);
+
+    if (!cliente || !produto) {
+      return res.status(400).json({
+        erro: true,
+        mensagem:
+          "Informe cliente e produto. Exemplo: /proposta?cliente=MARIANA&produto=ROMANO&quantidade=10"
+      });
+    }
+
+    const dadosCliente = await chamarOmie(
+      OMIE_CLIENTES_URL,
+      "ListarClientes",
+      {
+        pagina: 1,
+        registros_por_pagina: 10,
+        apenas_importado_api: "N",
+        clientesFiltro: {
+          razao_social: cliente
+        }
+      }
+    );
+
+    const dadosProduto = await chamarOmie(
+      OMIE_PRODUTOS_URL,
+      "ListarProdutos",
+      {
+        pagina: 1,
+        registros_por_pagina: 50,
+        filtrar_apenas_omiepdv: "N",
+        apenas_importado_api: "N"
+      }
+    );
+
+    let produtos = dadosProduto.produto_servico_cadastro || [];
+
+    produtos = produtos.filter((item) =>
+      JSON.stringify(item)
+        .toUpperCase()
+        .includes(produto.toUpperCase())
+    );
+
+    res.json({
+      cliente_pesquisado: cliente,
+      produto_pesquisado: produto,
+      quantidade,
+      clientes_encontrados: dadosCliente.clientes_cadastro || [],
+      produtos_encontrados: produtos,
+      orientacao_para_gpt:
+        "Use os dados retornados para montar uma proposta comercial objetiva. Se o preço não estiver claro no cadastro do produto, informe que o valor precisa ser confirmado antes do envio."
+    });
+  } catch (error) {
+    res.status(500).json({
+      erro: true,
+      mensagem: "Erro ao montar proposta",
       detalhe: error.response?.data || error.message
     });
   }
