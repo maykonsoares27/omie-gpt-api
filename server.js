@@ -7,6 +7,10 @@ app.use(express.json());
 const OMIE_CLIENTES_URL = "https://app.omie.com.br/api/v1/geral/clientes/";
 const OMIE_PRODUTOS_URL = "https://app.omie.com.br/api/v1/geral/produtos/";
 
+let produtosCache = null;
+let produtosCacheHora = 0;
+const CACHE_TEMPO_MS = 5 * 60 * 1000; // 5 minutos
+
 async function chamarOmie(url, call, param) {
   const response = await axios.post(url, {
     call,
@@ -16,6 +20,93 @@ async function chamarOmie(url, call, param) {
   });
 
   return response.data;
+}
+
+function limparTexto(texto) {
+  return String(texto || "")
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function resumirCliente(cliente) {
+  return {
+    codigo_cliente_omie: cliente.codigo_cliente_omie,
+    razao_social: cliente.razao_social,
+    nome_fantasia: cliente.nome_fantasia,
+    cnpj_cpf: cliente.cnpj_cpf,
+    cidade: cliente.cidade,
+    estado: cliente.estado,
+    email: cliente.email,
+    telefone1_ddd: cliente.telefone1_ddd,
+    telefone1_numero: cliente.telefone1_numero,
+    endereco: cliente.endereco,
+    endereco_numero: cliente.endereco_numero,
+    bairro: cliente.bairro,
+    cep: cliente.cep,
+    tags: cliente.tags
+  };
+}
+
+function resumirProduto(produto) {
+  return {
+    codigo: produto.codigo,
+    codigo_produto: produto.codigo_produto,
+    codigo_produto_integracao: produto.codigo_produto_integracao,
+    descricao: produto.descricao,
+    unidade: produto.unidade,
+    valor_unitario: produto.valor_unitario,
+    codigo_familia: produto.codigo_familia,
+    descricao_familia: produto.descricao_familia,
+    bloqueado: produto.bloqueado,
+    inativo: produto.inativo,
+    marca: produto.marca,
+    modelo: produto.modelo,
+    ncm: produto.ncm,
+    ean: produto.ean
+  };
+}
+
+async function buscarProdutosOmie() {
+  const agora = Date.now();
+
+  if (produtosCache && agora - produtosCacheHora < CACHE_TEMPO_MS) {
+    return produtosCache;
+  }
+
+  const primeiraPagina = await chamarOmie(
+    OMIE_PRODUTOS_URL,
+    "ListarProdutos",
+    {
+      pagina: 1,
+      registros_por_pagina: 50,
+      filtrar_apenas_omiepdv: "N",
+      apenas_importado_api: "N"
+    }
+  );
+
+  const totalPaginas = primeiraPagina.total_de_paginas || 1;
+  let todosProdutos = primeiraPagina.produto_servico_cadastro || [];
+
+  for (let pagina = 2; pagina <= totalPaginas; pagina++) {
+    const dados = await chamarOmie(
+      OMIE_PRODUTOS_URL,
+      "ListarProdutos",
+      {
+        pagina,
+        registros_por_pagina: 50,
+        filtrar_apenas_omiepdv: "N",
+        apenas_importado_api: "N"
+      }
+    );
+
+    todosProdutos = todosProdutos.concat(dados.produto_servico_cadastro || []);
+  }
+
+  produtosCache = todosProdutos;
+  produtosCacheHora = agora;
+
+  return todosProdutos;
 }
 
 app.get("/", (req, res) => {
@@ -55,7 +146,14 @@ app.get("/clientes", async (req, res) => {
       }
     );
 
-    res.json(dados);
+    const clientes = dados.clientes_cadastro || [];
+
+    res.json({
+      encontrados: clientes.length,
+      clientes: clientes.map(resumirCliente),
+      aviso:
+        "Dados consultados no Omie. Confirme antes de usar em documento, proposta ou comunicação oficial."
+    });
   } catch (error) {
     res.status(500).json({
       erro: true,
@@ -68,32 +166,29 @@ app.get("/clientes", async (req, res) => {
 app.get("/produtos", async (req, res) => {
   try {
     const nome = req.query.nome || "";
+    const busca = limparTexto(nome);
 
-    const dados = await chamarOmie(
-      OMIE_PRODUTOS_URL,
-      "ListarProdutos",
-      {
-        pagina: 1,
-        registros_por_pagina: 50,
-        filtrar_apenas_omiepdv: "N",
-        apenas_importado_api: "N"
-      }
-    );
+    let produtos = await buscarProdutosOmie();
 
-    let produtos = dados.produto_servico_cadastro || [];
+    produtos = produtos.filter((produto) => {
+      const textoProduto = limparTexto(JSON.stringify(produto));
 
-    if (nome) {
-      produtos = produtos.filter((produto) =>
-        JSON.stringify(produto)
-          .toUpperCase()
-          .includes(nome.toUpperCase())
-      );
-    }
+      const descricao = limparTexto(produto.descricao);
+      const codigo = limparTexto(produto.codigo);
+      const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
+
+      if (inativo) return false;
+
+      if (!busca) return true;
+
+      return textoProduto.includes(busca);
+    });
 
     res.json({
       encontrados: produtos.length,
-      total_omie: dados.total_de_registros,
-      produtos
+      produtos: produtos.slice(0, 50).map(resumirProduto),
+      aviso:
+        "Produtos consultados no Omie. Preço, código e cadastro devem ser confirmados antes de proposta oficial."
     });
   } catch (error) {
     res.status(500).json({
@@ -131,33 +226,31 @@ app.get("/proposta", async (req, res) => {
       }
     );
 
-    const dadosProduto = await chamarOmie(
-      OMIE_PRODUTOS_URL,
-      "ListarProdutos",
-      {
-        pagina: 1,
-        registros_por_pagina: 50,
-        filtrar_apenas_omiepdv: "N",
-        apenas_importado_api: "N"
-      }
-    );
+    const clientes = dadosCliente.clientes_cadastro || [];
 
-    let produtos = dadosProduto.produto_servico_cadastro || [];
+    const todosProdutos = await buscarProdutosOmie();
+    const buscaProduto = limparTexto(produto);
 
-    produtos = produtos.filter((item) =>
-      JSON.stringify(item)
-        .toUpperCase()
-        .includes(produto.toUpperCase())
-    );
+    const produtos = todosProdutos
+      .filter((item) => {
+        const descricao = limparTexto(item.descricao);
+        const codigo = limparTexto(item.codigo);
+        const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
+
+        if (inativo) return false;
+
+        return limparTexto(JSON.stringify(item)).includes(buscaProduto);
+      })
+      .slice(0, 20);
 
     res.json({
       cliente_pesquisado: cliente,
       produto_pesquisado: produto,
       quantidade,
-      clientes_encontrados: dadosCliente.clientes_cadastro || [],
-      produtos_encontrados: produtos,
+      clientes_encontrados: clientes.map(resumirCliente),
+      produtos_encontrados: produtos.map(resumirProduto),
       orientacao_para_gpt:
-        "Use os dados retornados para montar uma proposta comercial objetiva. Se o preço não estiver claro no cadastro do produto, informe que o valor precisa ser confirmado antes do envio."
+        "Monte uma proposta comercial objetiva com os dados retornados. Se houver mais de um cliente ou produto, peça ao usuário para escolher. Nunca invente preço, desconto, prazo, brinde ou condição comercial. Informe que preço e cadastro foram consultados no Omie e devem ser revisados antes do envio oficial."
     });
   } catch (error) {
     res.status(500).json({
@@ -166,6 +259,16 @@ app.get("/proposta", async (req, res) => {
       detalhe: error.response?.data || error.message
     });
   }
+});
+
+app.get("/limpar-cache", (req, res) => {
+  produtosCache = null;
+  produtosCacheHora = 0;
+
+  res.json({
+    status: "cache_limpo",
+    mensagem: "Cache de produtos limpo. A próxima consulta buscará novamente no Omie."
+  });
 });
 
 const PORT = process.env.PORT || 10000;
