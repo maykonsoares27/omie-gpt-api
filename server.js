@@ -147,7 +147,7 @@ app.get("/", (req, res) => {
       "/clientes?nome=MARIANA",
       "/produtos?nome=ROMANO",
       "/estoque?produto=ROMANO",
-      "/estoque?codigo_produto=8795450590",
+      "/estoque?id_prod=8795450590",
       "/pedidos",
       "/receber",
       "/ordens-producao",
@@ -222,10 +222,10 @@ app.get("/produtos", async (req, res) => {
 app.get("/estoque", async (req, res) => {
   try {
     const produto = req.query.produto || "";
-    let codigo_produto = req.query.codigo_produto || "";
+    let id_prod = req.query.id_prod || req.query.codigo_produto || "";
     const data = req.query.data || hojeBR();
 
-    if (!codigo_produto && produto) {
+    if (!id_prod && produto) {
       const encontrados = await buscarProdutoPorNome(produto);
 
       if (encontrados.length === 0) {
@@ -240,30 +240,30 @@ app.get("/estoque", async (req, res) => {
         return res.json({
           escolha_necessaria: true,
           mensagem:
-            "Encontrei mais de um produto. Escolha um codigo_produto para consultar o estoque.",
+            "Encontrei mais de um produto. Escolha um id_prod para consultar o estoque.",
           produtos: encontrados.map(resumirProduto)
         });
       }
 
-      codigo_produto = encontrados[0].codigo_produto;
+      id_prod = encontrados[0].codigo_produto;
     }
 
-    if (!codigo_produto) {
+    if (!id_prod) {
       return res.status(400).json({
         erro: true,
         mensagem:
-          "Informe codigo_produto ou produto. Exemplo: /estoque?produto=ROMANO"
+          "Informe id_prod ou produto. Exemplo: /estoque?id_prod=8795450590"
       });
     }
 
     const dados = await chamarOmie(URLS.estoque, "PosicaoEstoque", {
-      codigo_produto: Number(codigo_produto),
+      id_prod: Number(id_prod),
       data
     });
 
     res.json({
       consulta: "estoque",
-      codigo_produto,
+      id_prod,
       data,
       dados
     });
