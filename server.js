@@ -14,8 +14,6 @@ const URLS = {
   ordemProducao: "https://app.omie.com.br/api/v1/produtos/op/"
 };
 
-const FINANCEIRO_SENHA = "12345678";
-
 let produtosCache = null;
 let produtosCacheHora = 0;
 const CACHE_TEMPO_MS = 5 * 60 * 1000;
@@ -146,20 +144,18 @@ app.get("/", (req, res) => {
   res.json({
     status: "online",
     empresa: "Industria de Cafe Nova Era",
-    rotas_funcionando: [
+    rotas: [
       "/clientes?nome=MARIANA",
       "/produtos?nome=ROMANO",
       "/estoque?produto=ROMANO",
-      "/estoque?codigo_produto=8788183467",
+      "/estoque?codigo_produto=8795450590",
       "/pedidos",
       "/receber",
-      "/financeiro-resumo?senha=12345678",
+      "/financeiro-resumo",
       "/ordens-producao",
       "/proposta?cliente=MARIANA&produto=ROMANO&quantidade=10",
       "/limpar-cache"
-    ],
-    observacao:
-      "pedido-resumo e vendas-resumo foram removidos temporariamente porque o OMIE_CALL retornou method not exists."
+    ]
   });
 });
 
@@ -341,24 +337,10 @@ app.get("/receber", async (req, res) => {
 
 app.get("/financeiro-resumo", async (req, res) => {
   try {
-    const senha = req.query.senha;
-
-    if (senha !== FINANCEIRO_SENHA) {
-      return res.status(403).json({
-        erro: true,
-        mensagem: "Senha inválida para consultar resumo financeiro."
-      });
-    }
-
-    const data_inicio = req.query.data_inicio || inicioMesBR();
-
-    const dados = await chamarOmie(URLS.financeiroResumo, "ObterResumoFinancas", {
-      data_inicial: data_inicio
-    });
+    const dados = await chamarOmie(URLS.financeiroResumo, "ObterResumoFinancas", {});
 
     res.json({
       consulta: "financeiro-resumo",
-      data_inicial: data_inicio,
       dados
     });
   } catch (error) {
