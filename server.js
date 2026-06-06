@@ -10,7 +10,6 @@ const URLS = {
   estoque: "https://app.omie.com.br/api/v1/estoque/consulta/",
   pedidos: "https://app.omie.com.br/api/v1/produtos/pedido/",
   receber: "https://app.omie.com.br/api/v1/financas/contareceber/",
-  financeiroResumo: "https://app.omie.com.br/api/v1/financas/resumo/",
   ordemProducao: "https://app.omie.com.br/api/v1/produtos/op/"
 };
 
@@ -151,11 +150,11 @@ app.get("/", (req, res) => {
       "/estoque?codigo_produto=8795450590",
       "/pedidos",
       "/receber",
-      "/financeiro-resumo",
       "/ordens-producao",
       "/proposta?cliente=MARIANA&produto=ROMANO&quantidade=10",
       "/limpar-cache"
-    ]
+    ],
+    removido: "/financeiro-resumo removido por falta de estrutura correta no Omie"
   });
 });
 
@@ -330,24 +329,6 @@ app.get("/receber", async (req, res) => {
       erro: true,
       rota: "receber",
       call_testado: "ListarContasReceber",
-      detalhe: error.response?.data || error.message
-    });
-  }
-});
-
-app.get("/financeiro-resumo", async (req, res) => {
-  try {
-    const dados = await chamarOmie(URLS.financeiroResumo, "ObterResumoFinancas", {});
-
-    res.json({
-      consulta: "financeiro-resumo",
-      dados
-    });
-  } catch (error) {
-    res.status(500).json({
-      erro: true,
-      rota: "financeiro-resumo",
-      call_testado: "ObterResumoFinancas",
       detalhe: error.response?.data || error.message
     });
   }
