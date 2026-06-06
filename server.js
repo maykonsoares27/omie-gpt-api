@@ -9,11 +9,8 @@ const URLS = {
   produtos: "https://app.omie.com.br/api/v1/geral/produtos/",
   estoque: "https://app.omie.com.br/api/v1/estoque/consulta/",
   pedidos: "https://app.omie.com.br/api/v1/produtos/pedido/",
-  pedidoResumo: "https://app.omie.com.br/api/v1/produtos/pedidovenda/",
-  vendasResumo: "https://app.omie.com.br/api/v1/produtos/vendas-resumo/",
   receber: "https://app.omie.com.br/api/v1/financas/contareceber/",
   financeiroResumo: "https://app.omie.com.br/api/v1/financas/resumo/",
-  malha: "https://app.omie.com.br/api/v1/geral/malha/",
   ordemProducao: "https://app.omie.com.br/api/v1/produtos/op/"
 };
 
@@ -39,11 +36,6 @@ function limparTexto(texto) {
     .toUpperCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
-}
-
-function dataBR(data) {
-  if (!data) return "";
-  return String(data);
 }
 
 function hojeBR() {
@@ -133,24 +125,41 @@ async function buscarProdutosOmie() {
   return produtos;
 }
 
+async function buscarProdutoPorNome(nome) {
+  const busca = limparTexto(nome);
+  const produtos = await buscarProdutosOmie();
+
+  return produtos
+    .filter((p) => {
+      const descricao = limparTexto(p.descricao);
+      const codigo = limparTexto(p.codigo);
+      const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
+
+      if (inativo) return false;
+
+      return limparTexto(JSON.stringify(p)).includes(busca);
+    })
+    .slice(0, 20);
+}
+
 app.get("/", (req, res) => {
   res.json({
     status: "online",
     empresa: "Industria de Cafe Nova Era",
-    rotas: [
+    rotas_funcionando: [
       "/clientes?nome=MARIANA",
       "/produtos?nome=ROMANO",
       "/estoque?produto=ROMANO",
-      "/pedidos?data_inicio=01/06/2026&data_fim=30/06/2026",
-      "/pedido-resumo?data_inicio=01/06/2026&data_fim=30/06/2026",
-      "/vendas-resumo?data_inicio=01/06/2026&data_fim=30/06/2026",
-      "/receber?data_inicio=01/06/2026&data_fim=30/06/2026",
-      "/financeiro-resumo?senha=12345678&data_inicio=01/06/2026&data_fim=30/06/2026",
-      "/estrutura-produto?codigo_produto=123",
-      "/ordens-producao?data_inicio=01/06/2026&data_fim=30/06/2026",
+      "/estoque?codigo_produto=8788183467",
+      "/pedidos",
+      "/receber",
+      "/financeiro-resumo?senha=12345678",
+      "/ordens-producao",
       "/proposta?cliente=MARIANA&produto=ROMANO&quantidade=10",
       "/limpar-cache"
-    ]
+    ],
+    observacao:
+      "pedido-resumo e vendas-resumo foram removidos temporariamente porque o OMIE_CALL retornou method not exists."
   });
 });
 
@@ -193,19 +202,12 @@ app.get("/clientes", async (req, res) => {
 app.get("/produtos", async (req, res) => {
   try {
     const nome = req.query.nome || "";
-    const busca = limparTexto(nome);
-
-    let produtos = await buscarProdutosOmie();
+    let produtos = nome ? await buscarProdutoPorNome(nome) : await buscarProdutosOmie();
 
     produtos = produtos.filter((p) => {
       const descricao = limparTexto(p.descricao);
       const codigo = limparTexto(p.codigo);
-      const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
-
-      if (inativo) return false;
-      if (!busca) return true;
-
-      return limparTexto(JSON.stringify(p)).includes(busca);
+      return !descricao.startsWith("INAT") && !codigo.startsWith("INAT");
     });
 
     res.json({
@@ -225,38 +227,50 @@ app.get("/produtos", async (req, res) => {
 app.get("/estoque", async (req, res) => {
   try {
     const produto = req.query.produto || "";
-    const codigo_produto = req.query.codigo_produto || "";
+    let codigo_produto = req.query.codigo_produto || "";
     const data = req.query.data || hojeBR();
 
-    const param = {
-      data
-    };
+    if (!codigo_produto && produto) {
+      const encontrados = await buscarProdutoPorNome(produto);
 
-    if (codigo_produto) {
-      param.codigo_produto = Number(codigo_produto);
-    }
-
-    const dados = await chamarOmie(URLS.estoque, "PosicaoEstoque", param);
-
-    let resultado = dados;
-
-    if (produto) {
-      const busca = limparTexto(produto);
-      resultado = JSON.parse(JSON.stringify(dados));
-      const texto = limparTexto(JSON.stringify(resultado));
-
-      if (!texto.includes(busca)) {
-        resultado.aviso_busca =
-          "A consulta de estoque funcionou, mas o termo pesquisado não apareceu no retorno. Tente usar codigo_produto.";
+      if (encontrados.length === 0) {
+        return res.status(404).json({
+          erro: true,
+          mensagem: "Produto não encontrado para consultar estoque.",
+          produto_pesquisado: produto
+        });
       }
+
+      if (encontrados.length > 1) {
+        return res.json({
+          escolha_necessaria: true,
+          mensagem:
+            "Encontrei mais de um produto. Escolha um codigo_produto para consultar o estoque.",
+          produtos: encontrados.map(resumirProduto)
+        });
+      }
+
+      codigo_produto = encontrados[0].codigo_produto;
     }
+
+    if (!codigo_produto) {
+      return res.status(400).json({
+        erro: true,
+        mensagem:
+          "Informe codigo_produto ou produto. Exemplo: /estoque?produto=ROMANO"
+      });
+    }
+
+    const dados = await chamarOmie(URLS.estoque, "PosicaoEstoque", {
+      codigo_produto: Number(codigo_produto),
+      data
+    });
 
     res.json({
       consulta: "estoque",
-      produto_pesquisado: produto,
       codigo_produto,
       data,
-      dados: resultado
+      dados
     });
   } catch (error) {
     res.status(500).json({
@@ -292,60 +306,6 @@ app.get("/pedidos", async (req, res) => {
       erro: true,
       rota: "pedidos",
       call_testado: "ListarPedidos",
-      detalhe: error.response?.data || error.message
-    });
-  }
-});
-
-app.get("/pedido-resumo", async (req, res) => {
-  try {
-    const data_inicio = req.query.data_inicio || inicioMesBR();
-    const data_fim = req.query.data_fim || hojeBR();
-    const pagina = Number(req.query.pagina || 1);
-
-    const dados = await chamarOmie(URLS.pedidoResumo, "ListarPedidosVenda", {
-      pagina,
-      registros_por_pagina: 20,
-      apenas_importado_api: "N",
-      data_inicial: data_inicio,
-      data_final: data_fim
-    });
-
-    res.json({
-      consulta: "pedido-resumo",
-      periodo: { data_inicio, data_fim },
-      dados
-    });
-  } catch (error) {
-    res.status(500).json({
-      erro: true,
-      rota: "pedido-resumo",
-      call_testado: "ListarPedidosVenda",
-      detalhe: error.response?.data || error.message
-    });
-  }
-});
-
-app.get("/vendas-resumo", async (req, res) => {
-  try {
-    const data_inicio = req.query.data_inicio || inicioMesBR();
-    const data_fim = req.query.data_fim || hojeBR();
-
-    const dados = await chamarOmie(URLS.vendasResumo, "ObterResumoVendas", {
-      data_inicial: data_inicio,
-      data_final: data_fim
-    });
-
-    res.json({
-      consulta: "vendas-resumo",
-      periodo: { data_inicio, data_fim },
-      dados
-    });
-  } catch (error) {
-    res.status(500).json({
-      erro: true,
-      rota: "vendas-resumo",
-      call_testado: "ObterResumoVendas",
       detalhe: error.response?.data || error.message
     });
   }
@@ -391,16 +351,14 @@ app.get("/financeiro-resumo", async (req, res) => {
     }
 
     const data_inicio = req.query.data_inicio || inicioMesBR();
-    const data_fim = req.query.data_fim || hojeBR();
 
     const dados = await chamarOmie(URLS.financeiroResumo, "ObterResumoFinancas", {
-      data_inicial: data_inicio,
-      data_final: data_fim
+      data_inicial: data_inicio
     });
 
     res.json({
       consulta: "financeiro-resumo",
-      periodo: { data_inicio, data_fim },
+      data_inicial: data_inicio,
       dados
     });
   } catch (error) {
@@ -413,55 +371,17 @@ app.get("/financeiro-resumo", async (req, res) => {
   }
 });
 
-app.get("/estrutura-produto", async (req, res) => {
-  try {
-    const codigo_produto = req.query.codigo_produto;
-    const codigo = req.query.codigo;
-
-    const param = {};
-
-    if (codigo_produto) param.codigo_produto = Number(codigo_produto);
-    if (codigo) param.codigo = codigo;
-
-    if (!codigo_produto && !codigo) {
-      return res.status(400).json({
-        erro: true,
-        mensagem: "Informe codigo_produto ou codigo. Exemplo: /estrutura-produto?codigo_produto=123"
-      });
-    }
-
-    const dados = await chamarOmie(URLS.malha, "ConsultarEstrutura", param);
-
-    res.json({
-      consulta: "estrutura-produto",
-      dados
-    });
-  } catch (error) {
-    res.status(500).json({
-      erro: true,
-      rota: "estrutura-produto",
-      call_testado: "ConsultarEstrutura",
-      detalhe: error.response?.data || error.message
-    });
-  }
-});
-
 app.get("/ordens-producao", async (req, res) => {
   try {
-    const data_inicio = req.query.data_inicio || inicioMesBR();
-    const data_fim = req.query.data_fim || hojeBR();
     const pagina = Number(req.query.pagina || 1);
 
     const dados = await chamarOmie(URLS.ordemProducao, "ListarOrdemProducao", {
       pagina,
-      registros_por_pagina: 20,
-      data_inicial: data_inicio,
-      data_final: data_fim
+      registros_por_pagina: 20
     });
 
     res.json({
       consulta: "ordens-producao",
-      periodo: { data_inicio, data_fim },
       dados
     });
   } catch (error) {
@@ -483,7 +403,8 @@ app.get("/proposta", async (req, res) => {
     if (!cliente || !produto) {
       return res.status(400).json({
         erro: true,
-        mensagem: "Informe cliente e produto. Exemplo: /proposta?cliente=MARIANA&produto=ROMANO&quantidade=10"
+        mensagem:
+          "Informe cliente e produto. Exemplo: /proposta?cliente=MARIANA&produto=ROMANO&quantidade=10"
       });
     }
 
@@ -497,20 +418,7 @@ app.get("/proposta", async (req, res) => {
     });
 
     const clientes = dadosCliente.clientes_cadastro || [];
-    const todosProdutos = await buscarProdutosOmie();
-    const buscaProduto = limparTexto(produto);
-
-    const produtos = todosProdutos
-      .filter((p) => {
-        const descricao = limparTexto(p.descricao);
-        const codigo = limparTexto(p.codigo);
-        const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
-
-        if (inativo) return false;
-
-        return limparTexto(JSON.stringify(p)).includes(buscaProduto);
-      })
-      .slice(0, 20);
+    const produtos = await buscarProdutoPorNome(produto);
 
     res.json({
       cliente_pesquisado: cliente,
