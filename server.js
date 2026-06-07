@@ -24,7 +24,6 @@ async function chamarOmie(url, call, param = {}) {
     app_secret: process.env.OMIE_APP_SECRET,
     param: [param]
   });
-
   return response.data;
 }
 
@@ -131,18 +130,56 @@ async function buscarProdutoPorNome(nome) {
       const descricao = limparTexto(p.descricao);
       const codigo = limparTexto(p.codigo);
       const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
-
       if (inativo) return false;
-
       return limparTexto(JSON.stringify(p)).includes(busca);
     })
     .slice(0, 20);
+}
+
+async function enviarWhatsApp(para, texto) {
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const token = process.env.WHATSAPP_TOKEN;
+
+  await axios.post(
+    `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to: para,
+      type: "text",
+      text: { body: texto }
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+}
+
+async function responderMensagemWhatsApp(texto) {
+  const msg = limparTexto(texto);
+
+  if (msg.includes("ROMANO") || msg.includes("PRODUTO")) {
+    return "Boa! ☕ Posso consultar produto e estoque no Omie. Me envie o nome exato do produto ou o código.";
+  }
+
+  if (msg.includes("ESTOQUE")) {
+    return "Para consultar estoque, me envie assim: ESTOQUE ROMANO ou ESTOQUE + nome do produto.";
+  }
+
+  if (msg.includes("RECEBER") || msg.includes("FINANCEIRO")) {
+    return "Consulta financeira é restrita à equipe autorizada. Me confirme a senha de equipe para continuar.";
+  }
+
+  return "Olá! ☕ Sou o atendimento da Café Ello/Nova Era. Me diga como posso ajudar: produto, estoque, pedido ou atendimento comercial.";
 }
 
 app.get("/", (req, res) => {
   res.json({
     status: "online",
     empresa: "Industria de Cafe Nova Era",
+    whatsapp: "/webhook-whatsapp",
     rotas: [
       "/clientes?nome=MARIANA",
       "/produtos?nome=ROMANO",
@@ -153,9 +190,44 @@ app.get("/", (req, res) => {
       "/ordens-producao",
       "/proposta?cliente=MARIANA&produto=ROMANO&quantidade=10",
       "/limpar-cache"
-    ],
-    removido: "/financeiro-resumo removido por falta de estrutura correta no Omie"
+    ]
   });
+});
+
+app.get("/webhook-whatsapp", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+
+  return res.sendStatus(403);
+});
+
+app.post("/webhook-whatsapp", async (req, res) => {
+  try {
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
+      return res.sendStatus(200);
+    }
+
+    const from = message.from;
+    const texto = message.text?.body || "";
+
+    const resposta = await responderMensagemWhatsApp(texto);
+    await enviarWhatsApp(from, resposta);
+
+    return res.sendStatus(200);
+  } catch (error) {
+    console.error("Erro webhook WhatsApp:", error.response?.data || error.message);
+    return res.sendStatus(200);
+  }
 });
 
 app.get("/clientes", async (req, res) => {
@@ -173,9 +245,7 @@ app.get("/clientes", async (req, res) => {
       pagina: 1,
       registros_por_pagina: 10,
       apenas_importado_api: "N",
-      clientesFiltro: {
-        razao_social: nome
-      }
+      clientesFiltro: { razao_social: nome }
     });
 
     const clientes = dados.clientes_cadastro || [];
@@ -239,8 +309,7 @@ app.get("/estoque", async (req, res) => {
       if (encontrados.length > 1) {
         return res.json({
           escolha_necessaria: true,
-          mensagem:
-            "Encontrei mais de um produto. Escolha um id_prod para consultar o estoque.",
+          mensagem: "Encontrei mais de um produto. Escolha um id_prod para consultar o estoque.",
           produtos: encontrados.map(resumirProduto)
         });
       }
@@ -251,8 +320,7 @@ app.get("/estoque", async (req, res) => {
     if (!id_prod) {
       return res.status(400).json({
         erro: true,
-        mensagem:
-          "Informe id_prod ou produto. Exemplo: /estoque?id_prod=8795450590"
+        mensagem: "Informe id_prod ou produto. Exemplo: /estoque?id_prod=8795450590"
       });
     }
 
@@ -366,8 +434,7 @@ app.get("/proposta", async (req, res) => {
     if (!cliente || !produto) {
       return res.status(400).json({
         erro: true,
-        mensagem:
-          "Informe cliente e produto. Exemplo: /proposta?cliente=MARIANA&produto=ROMANO&quantidade=10"
+        mensagem: "Informe cliente e produto. Exemplo: /proposta?cliente=MARIANA&produto=ROMANO&quantidade=10"
       });
     }
 
@@ -375,9 +442,7 @@ app.get("/proposta", async (req, res) => {
       pagina: 1,
       registros_por_pagina: 10,
       apenas_importado_api: "N",
-      clientesFiltro: {
-        razao_social: cliente
-      }
+      clientesFiltro: { razao_social: cliente }
     });
 
     const clientes = dadosCliente.clientes_cadastro || [];
