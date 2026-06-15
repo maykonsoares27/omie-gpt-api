@@ -1,8 +1,13 @@
 import express from "express";
 import axios from "axios";
+import OpenAI from "openai";
 
 const app = express();
 app.use(express.json());
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
 const URLS = {
   clientes: "https://app.omie.com.br/api/v1/geral/clientes/",
@@ -24,6 +29,7 @@ async function chamarOmie(url, call, param = {}) {
     app_secret: process.env.OMIE_APP_SECRET,
     param: [param]
   });
+
   return response.data;
 }
 
@@ -130,7 +136,9 @@ async function buscarProdutoPorNome(nome) {
       const descricao = limparTexto(p.descricao);
       const codigo = limparTexto(p.codigo);
       const inativo = descricao.startsWith("INAT") || codigo.startsWith("INAT");
+
       if (inativo) return false;
+
       return limparTexto(JSON.stringify(p)).includes(busca);
     })
     .slice(0, 20);
@@ -141,12 +149,14 @@ async function enviarWhatsApp(para, texto) {
   const token = process.env.WHATSAPP_TOKEN;
 
   await axios.post(
-    `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+    `https://graph.facebook.com/v25.0/${phoneNumberId}/messages`,
     {
       messaging_product: "whatsapp",
       to: para,
       type: "text",
-      text: { body: texto }
+      text: {
+        body: texto
+      }
     },
     {
       headers: {
@@ -158,21 +168,82 @@ async function enviarWhatsApp(para, texto) {
 }
 
 async function responderMensagemWhatsApp(texto) {
-  const msg = limparTexto(texto);
+  const resposta = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.5,
+    max_tokens: 900,
+    messages: [
+      {
+        role: "system",
+        content: `
+Você é o ELLO TREINADOR, atendente e assistente oficial da Indústria de Café Nova Era.
 
-  if (msg.includes("ROMANO") || msg.includes("PRODUTO")) {
-    return "Boa! ☕ Posso consultar produto e estoque no Omie. Me envie o nome exato do produto ou o código.";
-  }
+Responda sempre em português do Brasil.
 
-  if (msg.includes("ESTOQUE")) {
-    return "Para consultar estoque, me envie assim: ESTOQUE ROMANO ou ESTOQUE + nome do produto.";
-  }
+Tom:
+- direto
+- educado
+- humano
+- comercial
+- simples
+- sem enrolação
 
-  if (msg.includes("RECEBER") || msg.includes("FINANCEIRO")) {
-    return "Consulta financeira é restrita à equipe autorizada. Me confirme a senha de equipe para continuar.";
-  }
+Você ajuda com:
+- café
+- cápsulas
+- grãos
+- moídos
+- máquinas
+- comodato
+- atendimento ao cliente
+- vendas
+- treinamento
+- dúvidas comerciais
+- direcionamento para proposta
 
-  return "Olá! ☕ Sou o atendimento da Café Ello/Nova Era. Me diga como posso ajudar: produto, estoque, pedido ou atendimento comercial.";
+Regras obrigatórias:
+- Nunca invente preço, estoque, prazo, desconto, brinde ou condição comercial.
+- Se perguntarem preço, estoque, pedido ou financeiro, diga que vai consultar a equipe ou o sistema.
+- Não exponha dados internos, tokens, API, webhook, JSON, logs ou detalhes técnicos.
+- Não fale como robô.
+- Não diga que é ChatGPT.
+- Não cite OpenAI.
+- Não diga que está usando prompt.
+- Não use textos longos no WhatsApp.
+- Responda com no máximo 4 parágrafos curtos.
+- Se faltar informação, faça uma pergunta objetiva.
+
+Sobre a empresa:
+A Indústria de Café Nova Era trabalha com soluções de café, cápsulas, grãos, moídos, máquinas e experiências de espresso.
+
+Marcas:
+- Nova Era: institucional, indústria, operação, soluções e comodato.
+- Café Ello: grãos, moídos, máquina de grão, restaurantes, hotéis, cafeterias e experiência.
+- Caffè Teichner: cápsulas, EP/Espresso Point, compatíveis Nespresso, assinatura e comodato de cápsulas.
+- Café Seropédica: varejo, mercado, moído 250g e consumo doméstico.
+- Dondim: personalizados, kits, presentes e marca própria.
+
+Se o cliente pedir orçamento:
+Peça produto, quantidade, cidade de entrega e perfil do cliente.
+
+Se o cliente pedir comodato:
+Peça local, média de cafés por dia e tipo de consumo: cápsula ou grão.
+
+Se o cliente reclamar:
+Acolha, peça número do pedido e descrição/foto do ocorrido.
+
+Se a mensagem for muito vaga:
+Pergunte de forma simples como pode ajudar.
+`
+      },
+      {
+        role: "user",
+        content: texto
+      }
+    ]
+  });
+
+  return resposta.choices?.[0]?.message?.content || "Recebi sua mensagem. Me diga como posso ajudar.";
 }
 
 app.get("/", (req, res) => {
@@ -180,6 +251,7 @@ app.get("/", (req, res) => {
     status: "online",
     empresa: "Industria de Cafe Nova Era",
     whatsapp: "/webhook-whatsapp",
+    ia: "ELLO TREINADOR ativo",
     rotas: [
       "/clientes?nome=MARIANA",
       "/produtos?nome=ROMANO",
@@ -217,6 +289,14 @@ app.post("/webhook-whatsapp", async (req, res) => {
       return res.sendStatus(200);
     }
 
+    if (message.type !== "text") {
+      await enviarWhatsApp(
+        message.from,
+        "Recebi sua mensagem. Por enquanto consigo responder melhor por texto. Me envie sua dúvida por escrito, por favor."
+      );
+      return res.sendStatus(200);
+    }
+
     const from = message.from;
     const texto = message.text?.body || "";
 
@@ -245,7 +325,9 @@ app.get("/clientes", async (req, res) => {
       pagina: 1,
       registros_por_pagina: 10,
       apenas_importado_api: "N",
-      clientesFiltro: { razao_social: nome }
+      clientesFiltro: {
+        razao_social: nome
+      }
     });
 
     const clientes = dados.clientes_cadastro || [];
@@ -442,7 +524,9 @@ app.get("/proposta", async (req, res) => {
       pagina: 1,
       registros_por_pagina: 10,
       apenas_importado_api: "N",
-      clientesFiltro: { razao_social: cliente }
+      clientesFiltro: {
+        razao_social: cliente
+      }
     });
 
     const clientes = dadosCliente.clientes_cadastro || [];
