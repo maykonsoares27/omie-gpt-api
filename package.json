@@ -2,13 +2,14 @@
   "name": "omie-gpt-api",
   "version": "1.0.0",
   "type": "module",
-  "main": "server.js",
+  "main": "servidor.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node servidor.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "openai": "^5.5.1"
   }
 }
